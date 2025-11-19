@@ -49,7 +49,12 @@ export default function SignUpPage() {
       if (role === 'OWNER') router.push('/dashboard/properties')
       else router.push('/')
     } catch (err: any) {
-      setError(err.message || 'Failed to create account')
+      const msg = err?.message || 'Failed to create account'
+      if (msg.includes('Blocked self-role change')) {
+        setError('Owner role assignment was blocked by the server. Please try again later or contact support.')
+      } else {
+        setError(msg)
+      }
     }
   }
 
@@ -59,7 +64,12 @@ export default function SignUpPage() {
       try { setLocalRole(role) } catch (e) {}
       router.push('/')
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in with Google')
+      const msg = err?.message || 'Failed to sign in with Google'
+      if (msg.includes('Blocked self-role change')) {
+        setError('Owner role assignment was blocked by the server. Please try again later or contact support.')
+      } else {
+        setError(msg)
+      }
     }
   }
 

@@ -17,7 +17,7 @@ interface AuthContextType {
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, name: string, role?: string) => Promise<void>
-  signInWithGoogle: () => Promise<void>
+  signInWithGoogle: (role?: string) => Promise<void>
   // optional role override stored locally until backend confirms
   setLocalRole: (role: string | null) => void
   signOut: () => Promise<void>
@@ -152,8 +152,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Refresh session to pick up the backend-assigned role and token
             await exchangeToken(userCredential.user)
           }
-        } catch (err) {
-          console.warn('Failed to persist role to backend during signup:', err)
+        } catch (err: any) {
+          const message = err?.response?.data?.message || err?.message || 'Failed to persist role to backend during signup'
+          throw new Error(message)
         }
       }
       toast.success('Account created successfully!')
@@ -165,14 +166,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (role?: string) => {
     try {
       setLoading(true)
       const provider = new GoogleAuthProvider()
       const userCredential = await signInWithPopup(auth, provider)
       await exchangeToken(userCredential.user)
-      // Role assignment must happen via backend set-role flow; do not
-      // persist any client-only role selection here.
+
+      // If a role was selected on the client during social sign-in, request
+      // the backend to persist it. If backend rejects (for example, policy
+      // prevents immediate OWNER assignment), surface the error to the
+      // caller so the UI can inform the user.
+      if (role) {
+        try {
+          const backendToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null
+          if (backendToken) {
+            await apiClient.post('/auth/set-role', { role }, { headers: { Authorization: `Bearer ${backendToken}` } })
+            await exchangeToken(userCredential.user)
+          }
+        } catch (err: any) {
+          const message = err?.response?.data?.message || err?.message || 'Failed to persist role to backend during Google sign-in'
+          throw new Error(message)
+        }
+      }
+
       toast.success('Signed in with Google!')
     } catch (error: any) {
       toast.error(error.message || 'Google sign in failed')

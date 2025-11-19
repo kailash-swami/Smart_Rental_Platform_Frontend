@@ -97,6 +97,7 @@ export const propertyAPI = {
 export const chatAPI = {
   getConversations: (userId: string) => apiClient.get(`/chat/conversations/${userId}`),
   sendMessage: (data: any) => apiClient.post('/chat/messages', data),
+  sendMessageToOwner: (propertyId: string, content: string) => apiClient.post('/chat/message-to-owner', { propertyId, content }),
 }
 
 export const authAPI = {

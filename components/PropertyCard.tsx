@@ -1,16 +1,20 @@
 
-import React from 'react'
+import React, { useState } from 'react'
 import Image from 'next/image'
 import { Property } from '@/types'
 import { FiMapPin, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi'
+import EnquireModal from './EnquireModal'
+import { useAuth } from '@/lib/AuthContext'
 
 interface PropertyCardProps {
   property: Property
 }
 
 const PropertyCard: React.FC<PropertyCardProps> = ({ property }) => {
+  const { user } = useAuth()
   const mainImage = property.images?.[0]?.url || '/placeholder-property.jpg'
   const fraudLevel = property.fraudScore ?? 0
+  const [openEnquire, setOpenEnquire] = useState(false)
 
   const FraudBadge: React.FC = () => {
     if (fraudLevel < 0.3) return <span className="flex items-center space-x-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded"><FiCheckCircle className="w-3 h-3" /><span>Verified</span></span>
@@ -30,6 +34,7 @@ const PropertyCard: React.FC<PropertyCardProps> = ({ property }) => {
   }
 
   return (
+    <>
     <a href={`/properties/${property.id}`} className="block">
       <div className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer h-full flex flex-col">
         <div className="relative h-48 bg-gray-200">
@@ -65,10 +70,18 @@ const PropertyCard: React.FC<PropertyCardProps> = ({ property }) => {
                 )}
               </div>
             </div>
+            <div className="mt-3 flex justify-end">
+              <button type="button" onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setOpenEnquire(true)}} className="px-3 py-2 bg-primary-600 text-white rounded">Rent Enquire</button>
+            </div>
           </div>
         </div>
       </div>
     </a>
+
+    {openEnquire && (
+      <EnquireModal propertyId={property.id} propertyTitle={property.title} onClose={() => setOpenEnquire(false)} />
+    )}
+    </>
 
   )
 }

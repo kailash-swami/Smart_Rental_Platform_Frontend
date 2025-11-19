@@ -6,6 +6,7 @@ import { User as FirebaseUser, onAuthStateChanged, signInWithEmailAndPassword, c
 import { auth } from '@/lib/firebase'
 import { User } from '@/types'
 import { apiClient } from '@/lib/api'
+import { disconnectSocket } from '@/lib/socket'
 import { useRouter } from 'next/router'
 import toast from 'react-hot-toast'
 
@@ -16,7 +17,7 @@ interface AuthContextType {
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string, name: string, role?: string) => Promise<void>
-  signInWithGoogle: (role?: string) => Promise<void>
+  signInWithGoogle: () => Promise<void>
   // optional role override stored locally until backend confirms
   setLocalRole: (role: string | null) => void
   signOut: () => Promise<void>
@@ -43,24 +44,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const exchangeToken = async (fbUser: FirebaseUser) => {
     try {
       const idToken = await fbUser.getIdToken()
-      const response = await apiClient.post('/auth/session', {}, {
-        headers: { Authorization: `Bearer ${idToken}` }
-      })
+      // If the user previously selected a preferred role (e.g. to choose a
+      // profile when multiple profiles exist for the same email), include
+      // it so the backend can return the correct profile.
+      const headers: Record<string,string> = { Authorization: `Bearer ${idToken}` }
+      try {
+        const storedPref = typeof window !== 'undefined' ? localStorage.getItem('preferredRole') : null
+        if (storedPref) headers['x-preferred-role'] = storedPref
+      } catch (e) {}
+
+      const response = await apiClient.post('/auth/session', {}, { headers })
       
       const { token: backendToken, user: userData } = response.data
       setToken(backendToken)
-      setUser(userData)
-      
-      // Store token in localStorage
+
+      // Always respect the backend's authoritative role. If a previously stored
+      // local `preferredRole` disagrees with the backend, overwrite it so the
+      // UI cannot pretend to be a different role than the server knows.
+      let effectiveUser = userData
       if (typeof window !== 'undefined') {
-        localStorage.setItem('authToken', backendToken)
         try {
-          // Persist user's role as the preferred role so UI keeps showing it
-          if (userData && userData.role) localStorage.setItem('preferredRole', userData.role)
+          const storedPref = localStorage.getItem('preferredRole')
+          if (storedPref && userData && userData.role && storedPref !== userData.role) {
+            // Backend role wins — align stored preference
+            localStorage.setItem('preferredRole', userData.role)
+          } else if (!storedPref && userData && userData.role) {
+            localStorage.setItem('preferredRole', userData.role)
+          }
+
+          // Store token in localStorage
+          localStorage.setItem('authToken', backendToken)
         } catch (e) {
-          // ignore
+          // ignore localStorage failures
         }
       }
+
+      setUser(effectiveUser)
     } catch (error: any) {
       console.error('Error exchanging token:', error)
       toast.error('Authentication failed')
@@ -85,6 +104,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Handle error silently, already shown toast
         }
       } else {
+        // ensure socket is disconnected before removing token
+        try { disconnectSocket() } catch (e) {}
         setUser(null)
         setToken(null)
         if (typeof window !== 'undefined') {
@@ -98,15 +119,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe()
   }, [])
 
-  const signIn = async (email: string, password: string, role?: string) => {
+  const signIn = async (email: string, password: string) => {
     try {
       setLoading(true)
       const userCredential = await signInWithEmailAndPassword(auth, email, password)
       await exchangeToken(userCredential.user)
-      // Apply a local role override for immediate UX if provided
-      if (role) {
-        setUser((u) => (u ? { ...u, role } : u))
-      }
+      // Do NOT allow client-only role overrides on sign-in.
+      // The backend is authoritative for role membership; UI will be aligned
+      // to the server-provided role in `exchangeToken`.
       toast.success('Signed in successfully!')
     } catch (error: any) {
       toast.error(error.message || 'Sign in failed')
@@ -121,19 +141,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true)
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       await exchangeToken(userCredential.user)
-      // Best-effort: persist selected role to backend if available
-      try {
-        const backendToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null
-        if (backendToken && role) {
-          await apiClient.post('/auth/set-role', { role }, { headers: { Authorization: `Bearer ${backendToken}` } })
-        }
-      } catch (err) {
-        // ignore errors setting role on backend
-        console.warn('Failed to persist role to backend (optional):', err)
-      }
-      // Apply local role immediately so UI reflects choice (until backend confirms)
+      // Persist selected role to backend if provided. Only update local
+      // preference after the backend confirms so users cannot impersonate
+      // a role they did not sign up for.
       if (role) {
-        setUser((u) => (u ? { ...u, role } : u))
+        try {
+          const backendToken = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null
+          if (backendToken) {
+            await apiClient.post('/auth/set-role', { role }, { headers: { Authorization: `Bearer ${backendToken}` } })
+            // Refresh session to pick up the backend-assigned role and token
+            await exchangeToken(userCredential.user)
+          }
+        } catch (err) {
+          console.warn('Failed to persist role to backend during signup:', err)
+        }
       }
       toast.success('Account created successfully!')
     } catch (error: any) {
@@ -144,15 +165,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  const signInWithGoogle = async (role?: string) => {
+  const signInWithGoogle = async () => {
     try {
       setLoading(true)
       const provider = new GoogleAuthProvider()
       const userCredential = await signInWithPopup(auth, provider)
       await exchangeToken(userCredential.user)
-      if (role) {
-        setUser((u) => (u ? { ...u, role } : u))
-      }
+      // Role assignment must happen via backend set-role flow; do not
+      // persist any client-only role selection here.
       toast.success('Signed in with Google!')
     } catch (error: any) {
       toast.error(error.message || 'Google sign in failed')
@@ -165,6 +185,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     try {
       await firebaseSignOut(auth)
+      // disconnect socket before clearing local token to avoid unauthenticated reconnects
+      try { disconnectSocket() } catch (e) {}
       setUser(null)
       setToken(null)
       setFirebaseUser(null)

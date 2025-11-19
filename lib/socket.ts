@@ -6,24 +6,44 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:4000'
 
 let socket: Socket | null = null
 
+export const disconnectSocket = () => {
+  try {
+    if (socket) {
+      try { socket.disconnect() } catch (e) { /* ignore */ }
+      socket = null
+    }
+  } catch (e) {
+    console.warn('disconnectSocket failed', e)
+  }
+}
+
 export const useSocket = (userId?: string) => {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     if (!userId) return
 
-    // Initialize socket connection
+    // Initialize socket connection once, passing auth token in handshake
     if (!socket) {
+      let token: string | null = null
+      try {
+        token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null
+      } catch (e) {
+        token = null
+      }
+
       socket = io(WS_URL, {
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionAttempts: 5,
+        auth: { token },
       })
 
       socket.on('connect', () => {
         console.log('Socket connected')
         setConnected(true)
+        // Ask server to join the authenticated user's room. Server will validate.
         socket?.emit('join', { userId })
       })
 
